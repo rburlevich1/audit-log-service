@@ -31,4 +31,8 @@ dependencies {
 tasks.withType<Test> {
     environment("TESTCONTAINERS_RYUK_DISABLED", "true")
     useJUnitPlatform()
+
+    testLogging {
+        events("passed", "skipped", "failed")
+    }
 }
