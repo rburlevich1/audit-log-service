@@ -123,11 +123,71 @@ class AuditEventControllerTest {
         assertThat(delete.getStatusCode()).isIn(HttpStatus.NOT_FOUND, HttpStatus.METHOD_NOT_ALLOWED);
     }
 
+    @Test
+    void existingEventsCannotBeMutated() {
+        ResponseEntity<Map<String, Object>> created = post(Map.of(
+                "actor", "immutable:user",
+                "action", "resource.created",
+                "resource", "immutable:resource",
+                "outcome", "success",
+                "context", Map.of("version", 1)
+        ));
+        assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
+
+        ResponseEntity<java.util.List<Map<String, Object>>> beforeMutation = get(
+                "/audit-events?actor=immutable:user&resource=immutable:resource"
+        );
+        assertThat(beforeMutation.getBody()).hasSize(1);
+        Map<String, Object> storedEvent = beforeMutation.getBody().getFirst();
+
+        Map<String, Object> mutation = Map.of(
+                "actor", "immutable:user",
+                "action", "resource.deleted",
+                "resource", "immutable:resource",
+                "outcome", "error",
+                "context", Map.of("version", 2)
+        );
+
+        ResponseEntity<String> put = restTemplate.exchange(
+                baseUrl() + "/audit-events",
+                HttpMethod.PUT,
+                new HttpEntity<>(mutation),
+                String.class
+        );
+        ResponseEntity<String> delete = restTemplate.exchange(
+                baseUrl() + "/audit-events",
+                HttpMethod.DELETE,
+                HttpEntity.EMPTY,
+                String.class
+        );
+
+        assertThat(put.getStatusCode()).isIn(HttpStatus.NOT_FOUND, HttpStatus.METHOD_NOT_ALLOWED);
+        assertThat(delete.getStatusCode()).isIn(HttpStatus.NOT_FOUND, HttpStatus.METHOD_NOT_ALLOWED);
+
+        ResponseEntity<java.util.List<Map<String, Object>>> found = get(
+                "/audit-events?actor=immutable:user&resource=immutable:resource"
+        );
+
+        assertThat(found.getStatusCode()).isEqualTo(HttpStatus.OK);
+        assertThat(found.getBody()).hasSize(1);
+        assertThat(found.getBody().getFirst()).isEqualTo(storedEvent);
+    }
+
     private ResponseEntity<Map<String, Object>> post(Map<String, Object> request) {
         return restTemplate.exchange(
                 baseUrl() + "/audit-events",
                 HttpMethod.POST,
                 new HttpEntity<>(request),
+                new ParameterizedTypeReference<>() {
+                }
+        );
+    }
+
+    private ResponseEntity<java.util.List<Map<String, Object>>> get(String path) {
+        return restTemplate.exchange(
+                baseUrl() + path,
+                HttpMethod.GET,
+                HttpEntity.EMPTY,
                 new ParameterizedTypeReference<>() {
                 }
         );
