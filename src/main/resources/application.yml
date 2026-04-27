@@ -1,0 +1,17 @@
+spring:
+  datasource:
+    url: ${DATABASE_URL:jdbc:postgresql://localhost:5432/audit_log}
+    username: ${DATABASE_USERNAME:audit}
+    password: ${DATABASE_PASSWORD:audit}
+  flyway:
+    enabled: true
+  jpa:
+    hibernate:
+      ddl-auto: validate
+    open-in-view: false
+
+audit:
+  retention:
+    days: ${AUDIT_RETENTION_DAYS:90}
+    cron: ${AUDIT_RETENTION_CRON:0 0 2 * * *}
+
