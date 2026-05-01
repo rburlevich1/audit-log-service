@@ -13,4 +13,3 @@ dependencyResolutionManagement {
 }
 
 rootProject.name = "audit-log-service"
-
