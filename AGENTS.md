@@ -50,6 +50,13 @@ Store events for N days, then move to archival. N is configurable.
 Tamper-evidence via hash chain.
 
 
+## Repository workflow
+
+- Do not edit `AGENTS.md` unless the user explicitly asks for it.
+- When the user asks to push changes, create a new branch, push that branch to GitHub,
+  and open a pull request targeting `master`.
+
+
 ## Testing
 
 ### Rules — no exceptions
