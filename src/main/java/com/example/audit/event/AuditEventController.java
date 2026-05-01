@@ -16,26 +16,26 @@ import org.springframework.web.bind.annotation.RestController;
 @RestController
 @RequestMapping("/audit-events")
 public class AuditEventController {
-    private final AuditEventService service;
+  private final AuditEventService service;
 
-    public AuditEventController(AuditEventService service) {
-        this.service = service;
-    }
+  public AuditEventController(AuditEventService service) {
+    this.service = service;
+  }
 
-    @PostMapping
-    @ResponseStatus(HttpStatus.CREATED)
-    public AuditEvent create(@Valid @RequestBody AuditEventRequest request) {
-        return service.create(request);
-    }
+  @PostMapping
+  @ResponseStatus(HttpStatus.CREATED)
+  public AuditEvent create(@Valid @RequestBody AuditEventRequest request) {
+    return service.create(request);
+  }
 
-    @GetMapping
-    public List<AuditEvent> search(
-            @RequestParam(required = false) String actor,
-            @RequestParam(required = false) String resource,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant from,
-            @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME) Instant to
-    ) {
-        return service.search(actor, resource, from, to);
-    }
+  @GetMapping
+  public List<AuditEvent> search(
+      @RequestParam(required = false) String actor,
+      @RequestParam(required = false) String resource,
+      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+          Instant from,
+      @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
+          Instant to) {
+    return service.search(actor, resource, from, to);
+  }
 }
-
