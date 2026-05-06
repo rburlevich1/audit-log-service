@@ -6,21 +6,21 @@ A multisite e-commerce app based on SAP Commerce Cloud.
 
 ## Оценка
 
-| Критерий | Уровень |
-| --- | --- |
-| Feedback signals | L2 |
-| Context substrate | L1 |
-| Blast radius control | L1 |
+| Критерий             | Уровень |
+|----------------------|---------|
+| Feedback signals     | L2      |
+| Context substrate    | L1      |
+| Blast radius control | L1      |
 
 ## Карта доступов
 
-| Доступ | Статус |
-| --- | --- |
-| GitHub | [x] |
-| CI/CD | [x] |
-| Jira | [x] |
-| Staging | [x] |
-| Pre-commit / secrets | [ ] |
+| Доступ               | Статус |
+|----------------------|--------|
+| GitHub               | [x]    |
+| CI/CD                | [x]    |
+| Jira                 | [x]    |
+| Staging              | [x]    |
+| Pre-commit / secrets | [ ]    |
 
 ## Самое слабое место
 
@@ -28,7 +28,8 @@ A multisite e-commerce app based on SAP Commerce Cloud.
 
 ## Первый шаг к решению проблемы
 
-Разобраться в том, какие есть варианты, и понять, чего будет стоить их внедрение.
+0. Разобраться в том, какие есть варианты, и понять, чего будет стоить их внедрение.
+1. Выбрать пару критических типов проверок и внедрить их через pre-commit
 
 ## Что я вынес из статей
 
