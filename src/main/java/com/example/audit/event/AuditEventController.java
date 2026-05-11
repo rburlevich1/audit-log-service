@@ -39,10 +39,8 @@ public class AuditEventController {
           Instant to,
       @RequestParam(required = false) String cursor,
       @RequestParam(required = false) Integer limit) {
+    AuditPage page = service.search(new AuditEventQuery(actor, resource, from, to, cursor, limit));
     return new AuditEventPageResponse(
-        service.search(new AuditEventQuery(actor, resource, from, to, cursor, limit)).stream()
-            .map(responseMapper::toResponse)
-            .toList(),
-        null);
+        page.items().stream().map(responseMapper::toResponse).toList(), page.nextCursor());
   }
 }

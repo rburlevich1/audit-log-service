@@ -1,8 +1,11 @@
 package com.example.audit.event;
 
+import com.example.audit.event.cursor.CursorCodec;
+import com.example.audit.event.cursor.CursorFilterMismatchException;
+import com.example.audit.event.cursor.CursorPayload;
+import com.example.audit.event.cursor.FilterFingerprint;
 import java.time.Instant;
 import java.util.List;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.jpa.domain.Specification;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
@@ -10,12 +13,14 @@ import org.springframework.transaction.annotation.Transactional;
 @Service
 public class AuditEventService {
   private final AuditEventRepository repository;
-  private final int maxPageSize;
+  private final AuditQueryProperties properties;
+  private final CursorCodec cursorCodec;
 
   public AuditEventService(
-      AuditEventRepository repository, @Value("${audit.query.max-page-size:200}") int maxPageSize) {
+      AuditEventRepository repository, AuditQueryProperties properties, CursorCodec cursorCodec) {
     this.repository = repository;
-    this.maxPageSize = maxPageSize;
+    this.properties = properties;
+    this.cursorCodec = cursorCodec;
   }
 
   @Transactional
@@ -32,9 +37,37 @@ public class AuditEventService {
   }
 
   @Transactional(readOnly = true)
-  public List<AuditEvent> search(AuditEventQuery query) {
+  public AuditPage search(AuditEventQuery query) {
     validate(query);
 
+    int limit = query.limit() == null ? properties.getDefaultPageSize() : query.limit();
+    String fingerprint =
+        FilterFingerprint.compute(query.actor(), query.resource(), query.from(), query.to());
+
+    CursorPayload cursor = null;
+    if (query.cursor() != null) {
+      cursor = cursorCodec.decode(query.cursor());
+      if (!cursor.filterFingerprint().equals(fingerprint)) {
+        throw new CursorFilterMismatchException(
+            "Cursor was issued for a different filter combination");
+      }
+    }
+
+    Specification<AuditEvent> spec = buildSpecification(query, cursor);
+    List<AuditEvent> rows = repository.findKeysetPage(spec, limit + 1);
+
+    if (rows.size() <= limit) {
+      return new AuditPage(rows, null);
+    }
+    List<AuditEvent> page = rows.subList(0, limit);
+    AuditEvent last = page.get(page.size() - 1);
+    String nextCursor =
+        cursorCodec.encode(new CursorPayload(last.getTimestamp(), last.getId(), fingerprint));
+    return new AuditPage(page, nextCursor);
+  }
+
+  private Specification<AuditEvent> buildSpecification(
+      AuditEventQuery query, CursorPayload cursor) {
     Specification<AuditEvent> spec = Specification.where(null);
 
     if (query.actor() != null && !query.actor().isBlank()) {
@@ -55,16 +88,25 @@ public class AuditEventService {
           spec.and(
               (root, criteriaQuery, cb) -> cb.lessThanOrEqualTo(root.get("timestamp"), query.to()));
     }
-
-    return repository.findAll(spec);
+    if (cursor != null) {
+      Instant ts = cursor.occurredAt();
+      long id = cursor.id();
+      spec =
+          spec.and(
+              (root, criteriaQuery, cb) ->
+                  cb.or(
+                      cb.lessThan(root.get("timestamp"), ts),
+                      cb.and(
+                          cb.equal(root.get("timestamp"), ts), cb.lessThan(root.get("id"), id))));
+    }
+    return spec;
   }
 
   private void validate(AuditEventQuery query) {
-    if (query.cursor() != null) {
-      throw new BadAuditEventQueryException("Cursor is not supported yet");
-    }
-    if (query.limit() != null && (query.limit() < 1 || query.limit() > maxPageSize)) {
-      throw new BadAuditEventQueryException("Limit must be between 1 and " + maxPageSize);
+    if (query.limit() != null
+        && (query.limit() < 1 || query.limit() > properties.getMaxPageSize())) {
+      throw new BadAuditEventQueryException(
+          "Limit must be between 1 and " + properties.getMaxPageSize());
     }
     if (query.from() != null && query.to() != null && query.from().isAfter(query.to())) {
       throw new UnprocessableAuditEventQueryException("from must be before or equal to to");

@@ -1,5 +1,8 @@
 package com.example.audit.event;
 
+import com.example.audit.event.cursor.CursorFilterMismatchException;
+import com.example.audit.event.cursor.MalformedCursorException;
+import com.example.audit.event.cursor.TamperedCursorException;
 import java.util.Map;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.MethodArgumentNotValidException;
@@ -19,6 +22,24 @@ class AuditEventExceptionHandler {
   @ExceptionHandler(UnprocessableAuditEventQueryException.class)
   @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
   Map<String, String> unprocessableQuery(UnprocessableAuditEventQueryException exception) {
+    return Map.of("error", exception.getMessage());
+  }
+
+  @ExceptionHandler(MalformedCursorException.class)
+  @ResponseStatus(HttpStatus.BAD_REQUEST)
+  Map<String, String> malformedCursor(MalformedCursorException exception) {
+    return Map.of("error", exception.getMessage());
+  }
+
+  @ExceptionHandler(TamperedCursorException.class)
+  @ResponseStatus(HttpStatus.BAD_REQUEST)
+  Map<String, String> tamperedCursor(TamperedCursorException exception) {
+    return Map.of("error", exception.getMessage());
+  }
+
+  @ExceptionHandler(CursorFilterMismatchException.class)
+  @ResponseStatus(HttpStatus.UNPROCESSABLE_ENTITY)
+  Map<String, String> cursorFilterMismatch(CursorFilterMismatchException exception) {
     return Map.of("error", exception.getMessage());
   }
 

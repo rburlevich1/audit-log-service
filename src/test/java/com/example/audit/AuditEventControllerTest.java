@@ -4,7 +4,10 @@ import static org.assertj.core.api.Assertions.assertThat;
 
 import java.io.IOException;
 import java.net.ServerSocket;
+import java.sql.Timestamp;
 import java.time.Instant;
+import java.util.ArrayList;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
 import org.junit.jupiter.api.Test;
@@ -17,6 +20,7 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
 import org.testcontainers.containers.PostgreSQLContainer;
@@ -42,11 +46,14 @@ class AuditEventControllerTest {
     registry.add("spring.datasource.url", postgres::getJdbcUrl);
     registry.add("spring.datasource.username", postgres::getUsername);
     registry.add("spring.datasource.password", postgres::getPassword);
+    registry.add("audit.query.cursor-secret", () -> "test-secret-do-not-use-in-prod");
   }
 
   @LocalServerPort int port;
 
   @Autowired TestRestTemplate restTemplate;
+
+  @Autowired JdbcTemplate jdbcTemplate;
 
   @Test
   void createsAndSearchesAuditEvents() {
@@ -173,7 +180,6 @@ class AuditEventControllerTest {
 
     assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
     assertThat(response.getBody()).containsKey("items");
-    assertThat(response.getBody()).doesNotContainKey("nextCursor");
   }
 
   @Test
@@ -209,7 +215,7 @@ class AuditEventControllerTest {
   }
 
   @Test
-  void rejectsCursorUntilPaginationIsImplemented() {
+  void rejectsMalformedCursor() {
     ResponseEntity<Map<String, Object>> response = get("/audit-events?cursor=abc");
 
     assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
@@ -221,6 +227,149 @@ class AuditEventControllerTest {
         get("/audit-events?from=2026-05-01T00:00:00Z&to=2026-04-01T00:00:00Z");
 
     assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+  }
+
+  @Test
+  void paginatesThroughLargeResultSetsWithoutLossOrDuplication() {
+    String actor = "paging:walk";
+    int total = 10;
+    for (int i = 0; i < total; i++) {
+      post(
+          Map.of("actor", actor, "action", "evt." + i, "resource", "r:walk", "outcome", "success"));
+    }
+
+    List<Number> seen = new ArrayList<>();
+    String cursor = null;
+    int pages = 0;
+    while (true) {
+      String path =
+          "/audit-events?actor=" + actor + "&limit=3" + (cursor == null ? "" : "&cursor=" + cursor);
+      ResponseEntity<Map<String, Object>> response = get(path);
+
+      assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+      List<Map<String, Object>> items = items(response);
+      assertThat(items).isNotEmpty();
+      for (Map<String, Object> item : items) {
+        seen.add((Number) item.get("id"));
+      }
+      cursor = (String) response.getBody().get("nextCursor");
+      pages++;
+      assertThat(pages).isLessThanOrEqualTo(total);
+      if (cursor == null) {
+        break;
+      }
+    }
+
+    assertThat(seen).hasSize(total);
+    assertThat(new HashSet<>(seen)).hasSameSizeAs(seen);
+  }
+
+  @Test
+  void lastPageOmitsNextCursor() {
+    String actor = "paging:last";
+    post(
+        Map.of(
+            "actor", actor,
+            "action", "evt.only",
+            "resource", "r:last",
+            "outcome", "success"));
+
+    ResponseEntity<Map<String, Object>> response = get("/audit-events?actor=" + actor + "&limit=5");
+
+    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    assertThat(items(response)).hasSize(1);
+    assertThat(response.getBody()).doesNotContainKey("nextCursor");
+  }
+
+  @Test
+  void tiebreaksBySameTimestampUsingIdDescending() {
+    String actor = "tiebreak:user";
+    Instant timestamp = Instant.parse("2026-04-01T10:00:00Z");
+
+    Long id1 = insertEventDirect(actor, "r:tie", timestamp);
+    Long id2 = insertEventDirect(actor, "r:tie", timestamp);
+    Long id3 = insertEventDirect(actor, "r:tie", timestamp);
+
+    ResponseEntity<Map<String, Object>> response = get("/audit-events?actor=" + actor);
+
+    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    List<Map<String, Object>> items = items(response);
+    assertThat(items).hasSize(3);
+    assertThat(((Number) items.get(0).get("id")).longValue()).isEqualTo(id3);
+    assertThat(((Number) items.get(1).get("id")).longValue()).isEqualTo(id2);
+    assertThat(((Number) items.get(2).get("id")).longValue()).isEqualTo(id1);
+  }
+
+  @Test
+  void rejectsTamperedCursor() {
+    String actor = "tamper:user";
+    post(
+        Map.of(
+            "actor", actor,
+            "action", "evt.1",
+            "resource", "r",
+            "outcome", "success"));
+    post(
+        Map.of(
+            "actor", actor,
+            "action", "evt.2",
+            "resource", "r",
+            "outcome", "success"));
+
+    ResponseEntity<Map<String, Object>> firstPage =
+        get("/audit-events?actor=" + actor + "&limit=1");
+    String cursor = (String) firstPage.getBody().get("nextCursor");
+    assertThat(cursor).isNotNull();
+
+    int dot = cursor.indexOf('.');
+    char tagChar = cursor.charAt(dot + 1);
+    String tampered =
+        cursor.substring(0, dot + 1) + (tagChar == 'A' ? 'B' : 'A') + cursor.substring(dot + 2);
+
+    ResponseEntity<Map<String, Object>> response =
+        get("/audit-events?actor=" + actor + "&limit=1&cursor=" + tampered);
+
+    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+  }
+
+  @Test
+  void rejectsCursorIssuedForDifferentFilters() {
+    String actorA = "mismatch:a";
+    String actorB = "mismatch:b";
+    for (int i = 0; i < 3; i++) {
+      post(
+          Map.of(
+              "actor",
+              actorA,
+              "action",
+              "evt." + i,
+              "resource",
+              "r:mismatch",
+              "outcome",
+              "success"));
+    }
+
+    ResponseEntity<Map<String, Object>> firstPage =
+        get("/audit-events?actor=" + actorA + "&limit=1");
+    String cursor = (String) firstPage.getBody().get("nextCursor");
+    assertThat(cursor).isNotNull();
+
+    ResponseEntity<Map<String, Object>> mismatch =
+        get("/audit-events?actor=" + actorB + "&limit=1&cursor=" + cursor);
+
+    assertThat(mismatch.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
+  }
+
+  private Long insertEventDirect(String actor, String resource, Instant timestamp) {
+    return jdbcTemplate.queryForObject(
+        "insert into audit_events (event_timestamp, actor, action, resource, outcome)"
+            + " values (?, ?, ?, ?, ?) returning id",
+        Long.class,
+        Timestamp.from(timestamp),
+        actor,
+        "evt.direct",
+        resource,
+        "success");
   }
 
   private ResponseEntity<Map<String, Object>> post(Map<String, Object> request) {

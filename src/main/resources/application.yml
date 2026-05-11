@@ -14,4 +14,7 @@ audit:
   retention:
     days: ${AUDIT_RETENTION_DAYS:90}
     cron: ${AUDIT_RETENTION_CRON:0 0 2 * * *}
-
+  query:
+    cursor-secret: ${AUDIT_QUERY_CURSOR_SECRET:}
+    default-page-size: ${AUDIT_QUERY_DEFAULT_PAGE_SIZE:50}
+    max-page-size: ${AUDIT_QUERY_MAX_PAGE_SIZE:200}
