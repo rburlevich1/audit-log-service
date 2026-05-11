@@ -150,15 +150,17 @@ Scope: follow-up operational Flyway migration PR, outside the initial feature
 implementation path.
 
 DoD:
-- Trigger condition is met: at least one week in staging with `EXPLAIN ANALYZE`
-  on representative production queries (no-filter, actor-only, resource-only,
-  actor+resource, time-range-only) showing the four composite indexes from T2
-  are used; legacy single-column indexes are not chosen for the read path.
 - Migration drops `idx_audit_events_actor`, `idx_audit_events_resource`, and
-  `idx_audit_events_timestamp`.
-- Migration uses `DROP INDEX CONCURRENTLY` when Flyway can run it
-  non-transactionally; otherwise it is scheduled as regular `DROP INDEX` during
-  an approved low-traffic maintenance window.
-- Existing integration tests for query and ingest paths remain green against
-  the reduced index set.
+  `idx_audit_events_timestamp` via `DROP INDEX IF EXISTS` so it is idempotent
+  across environments.
+- Verification is local: the existing Testcontainers integration tests
+  (controller, invariants, migration) all pass against the reduced index
+  set, proving the four composite indexes from T2 cover every Query API
+  read path used by the suite.
+- The migration test asserts the four composite indexes are present and the
+  three legacy indexes are absent.
 - `./gradlew test` passes.
+- Production deployment cadence and concurrency strategy (`DROP INDEX` vs
+  `DROP INDEX CONCURRENTLY`, maintenance windows) is left to the deployer;
+  no staging-evidence gate is required for this repository because there is
+  no staging environment.

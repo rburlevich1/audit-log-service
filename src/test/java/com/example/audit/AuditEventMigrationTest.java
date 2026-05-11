@@ -29,7 +29,7 @@ class AuditEventMigrationTest {
               Wait.forLogMessage(".*database system is ready to accept connections.*\\s", 2));
 
   @Test
-  void migrationsCreateQueryApiIndexesWithoutDroppingLegacyIndexes() throws SQLException {
+  void migrationsLeaveOnlyCompositeQueryApiIndexes() throws SQLException {
     Flyway.configure()
         .dataSource(postgres.getJdbcUrl(), postgres.getUsername(), postgres.getPassword())
         .load()
@@ -39,13 +39,15 @@ class AuditEventMigrationTest {
 
     assertThat(indexes)
         .containsKeys(
-            "idx_audit_events_actor",
-            "idx_audit_events_resource",
-            "idx_audit_events_timestamp",
             "idx_audit_events_ts_id",
             "idx_audit_events_actor_ts_id",
             "idx_audit_events_resource_ts_id",
             "idx_audit_events_actor_resource_ts_id");
+    assertThat(indexes)
+        .doesNotContainKeys(
+            "idx_audit_events_actor",
+            "idx_audit_events_resource",
+            "idx_audit_events_timestamp");
 
     assertIndexDefinition(indexes, "idx_audit_events_ts_id", "(event_timestamp DESC, id DESC)");
     assertIndexDefinition(
