@@ -69,7 +69,14 @@ class AuditEventControllerTest {
 
     assertThat(found.getStatusCode()).isEqualTo(HttpStatus.OK);
     assertThat(items(found)).hasSize(1);
-    assertThat(items(found).getFirst()).containsEntry("actor", "user:123");
+    assertThat(items(found).getFirst())
+        .containsEntry("actor", "user:123")
+        .containsEntry("resource", "project:42")
+        .containsEntry("action", "resource.updated")
+        .containsEntry("outcome", "success");
+    assertThat(items(found).getFirst()).containsKeys("id", "occurredAt", "payload");
+    assertThat(items(found).getFirst()).doesNotContainKeys("timestamp", "context");
+    assertThat(items(found).getFirst().get("id")).isInstanceOf(Number.class);
     assertThat(found.getBody()).doesNotContainKey("nextCursor");
   }
 
@@ -166,6 +173,15 @@ class AuditEventControllerTest {
 
     assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
     assertThat(response.getBody()).containsKey("items");
+    assertThat(response.getBody()).doesNotContainKey("nextCursor");
+  }
+
+  @Test
+  void returnsEmptyItemsWrapperForEmptyResultSet() {
+    ResponseEntity<Map<String, Object>> response = get("/audit-events?actor=missing:user");
+
+    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    assertThat(items(response)).isEmpty();
     assertThat(response.getBody()).doesNotContainKey("nextCursor");
   }
 

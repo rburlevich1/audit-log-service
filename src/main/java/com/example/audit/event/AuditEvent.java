@@ -56,6 +56,11 @@ public class AuditEvent {
     this.context = context;
   }
 
+  @JsonIgnore
+  public Long getId() {
+    return id;
+  }
+
   public Instant getTimestamp() {
     return timestamp;
   }

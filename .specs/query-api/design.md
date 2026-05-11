@@ -230,8 +230,10 @@ Per-layer responsibilities for this feature:
     domain results. No JPA types, no Specifications, no SQL leakage.
   - Map storage fields → response fields (`id` → `id`,
     `event_timestamp` → `occurredAt`, `context` → `payload`).
-  - Controllers must not return JPA entity types. Add or keep an architecture
-    test that enforces this for controller method return types.
+  - Query endpoint controller methods must not return JPA entity types. Add or
+    keep an architecture test that enforces this for `GET /audit-events`
+    return types. Existing `POST /audit-events` response cleanup is outside
+    the Query API scope.
 
   Semantic failures (`from > to`, decoded-cursor inconsistent with current
   filters) are not the controller's job; they are caught in the service layer

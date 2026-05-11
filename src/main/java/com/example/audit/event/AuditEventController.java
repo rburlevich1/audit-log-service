@@ -16,9 +16,11 @@ import org.springframework.web.bind.annotation.RestController;
 @RequestMapping("/audit-events")
 public class AuditEventController {
   private final AuditEventService service;
+  private final AuditEventResponseMapper responseMapper;
 
-  public AuditEventController(AuditEventService service) {
+  public AuditEventController(AuditEventService service, AuditEventResponseMapper responseMapper) {
     this.service = service;
+    this.responseMapper = responseMapper;
   }
 
   @PostMapping
@@ -38,6 +40,9 @@ public class AuditEventController {
       @RequestParam(required = false) String cursor,
       @RequestParam(required = false) Integer limit) {
     return new AuditEventPageResponse(
-        service.search(new AuditEventQuery(actor, resource, from, to, cursor, limit)), null);
+        service.search(new AuditEventQuery(actor, resource, from, to, cursor, limit)).stream()
+            .map(responseMapper::toResponse)
+            .toList(),
+        null);
   }
 }
