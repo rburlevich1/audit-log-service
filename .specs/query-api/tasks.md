@@ -1,9 +1,9 @@
 # Query API Tasks
 
-## T1 — Resolve Query API Open Questions
+## T1 — Verify Query API Spec Consistency
 
 Refs:
-- `requirements.md` — Open Questions
+- `requirements.md` — Fixed Decisions, User Stories With AC
 - `design.md` — API Contract, Sort & Determinism, Validation Rules and Edge Cases
 
 Dependencies: none.
@@ -11,22 +11,11 @@ Dependencies: none.
 Scope: one documentation-only PR.
 
 DoD:
-- Default and maximum page size are specified.
-- Tiebreaker direction is specified.
-- `limit > max` behavior is specified.
-- Last-page `nextCursor` representation is specified.
-- Public response `id` shape is specified.
-- Actor/resource response shape is specified.
-- Timestamp format and malformed timestamp behavior are specified.
-- Maximum time range decision is specified, even if the answer is "no max".
-- `requirements.md` and `design.md` agree on all resolved decisions.
-- If T1 resolves to structured `actor{id,type}` / `resource{id,type}`, T1
-  updates this task list before implementation starts, either by adding a
-  separate storage/derivation task before T3 or by documenting that the shape is
-  derived from existing scalar fields.
-- If T1 resolves to a non-numeric public `id` (e.g. ULID), T1 updates this task
-  list before implementation starts by adding a public-id persistence task
-  before T3.
+- `requirements.md` has no unresolved Query API open questions.
+- `requirements.md` and `design.md` agree on page size, sort order, tiebreaker,
+  `limit > max`, timestamp format, last-page `nextCursor`, public `id`,
+  actor/resource shape, max time range, and auth scope.
+- `tasks.md` and plan files match the fixed spec decisions.
 
 ## T2 — Add Database Index Migration
 
@@ -40,7 +29,7 @@ Scope: one Flyway migration PR.
 DoD:
 - Migration adds composite indexes for no-filter, actor, resource, and
   actor+resource query paths.
-- Index order matches the resolved deterministic sort and tiebreaker direction.
+- Index order matches `occurredAt DESC, id DESC`.
 - Existing single-column indexes are not dropped in this task.
 - Testcontainers integration test boots PostgreSQL, runs all Flyway
   migrations, and asserts the four composite indexes exist via `pg_indexes`.
@@ -62,10 +51,11 @@ DoD:
   any non-null `cursor` is rejected with `400 Bad Request` ("cursor not yet
   supported"); signed cursor decoding lands in T5.
 - Empty filters are accepted.
-- Malformed timestamps and non-numeric `limit` return `400`.
+- Malformed timestamps, non-numeric `limit`, `limit < 1`, and
+  `limit > configured max` (default `200`) return `400`.
 - `from > to` returns `422`.
-- Response wraps results in `items` and page-level `nextCursor` (always
-  absent/null at this stage — no pagination yet).
+- Response wraps results in `items` and omitted page-level `nextCursor` at this
+  stage — no pagination yet.
 - Controller, service, and repository responsibilities follow `design.md`.
 - Integration tests cover `200`, `400` (parse failures), and `422`
   (`from > to`).
@@ -74,7 +64,7 @@ DoD:
 ## T4 — Add Response DTO, Mapping, and Contract Tests
 
 Refs:
-- `requirements.md` — Problem, User Stories With AC, Open Questions
+- `requirements.md` — Problem, User Stories With AC, Fixed Decisions
 - `design.md` — API Contract, Layer Integration
 
 Dependencies: T1, T3.
@@ -83,15 +73,13 @@ Scope: one response-contract PR. Locks the public response shape before any
 public pagination behavior is introduced.
 
 DoD:
-- Response item shape matches the decisions resolved in T1
-  (public `id` form, scalar vs structured `actor` / `resource`,
-  `event_timestamp` → `occurredAt`, `context` → `payload`).
+- Response item shape uses numeric database `id`, scalar `actor`/`resource`,
+  `event_timestamp` → `occurredAt`, and `context` → `payload`.
 - Response uses a dedicated `AuditEventPageResponse { items, nextCursor }` DTO,
   not the JPA entity. ArchUnit or equivalent asserts the controller does not
   return entity types.
-- Last-page `nextCursor` representation matches the decision resolved in T1,
-  with matching Jackson configuration (`@JsonInclude(NON_NULL)` for "omitted",
-  default for explicit `null`, custom serializer for `""`).
+- Last-page `nextCursor` is omitted using matching Jackson configuration such
+  as `@JsonInclude(NON_NULL)`.
 - Integration tests assert the response contract for non-empty and empty
   result sets (last-page behavior under real pagination is covered in T5).
 - `./gradlew test` passes.
@@ -109,14 +97,14 @@ because shipping unsigned cursor would violate the "tampered → 400" AC in
 `requirements.md`.
 
 DoD:
-- Results sort by `occurredAt` and the resolved event id tiebreaker.
+- Results sort by `occurredAt DESC, id DESC`.
 - Repository query uses keyset pagination, not offset pagination.
 - Cursor payload carries `(occurredAt, database id, filter-fingerprint)`.
 - Filter fingerprint is computed per `design.md` §2 (SHA-256 over canonical
   `(actor, resource, from, to)` tuple, unit-separator delimited, first
   16 bytes base64url-encoded).
-- Cursor is signed with HMAC-SHA256 using a configured server secret; secret
-  source documented (env var or config property).
+- Cursor is signed with HMAC-SHA256 using `audit.query.cursor-secret`, bound
+  from `AUDIT_QUERY_CURSOR_SECRET`.
 - Wire form is `<base64url(payload)>.<base64url(hmac)>`.
 - Structurally malformed cursors (bad base64, missing fields, wrong field
   types) return `400`.
@@ -127,8 +115,7 @@ DoD:
   same-`occurredAt` tiebreaker case.
 - `nextCursor` follows the last-page representation locked in T4.
 - Unit tests cover signing, verification, fingerprint canonicalization, and
-  the cursor predicate for both tiebreaker directions if T1 left it
-  configurable.
+  the `occurredAt DESC, id DESC` cursor predicate.
 - Integration tests cover multi-page results, same-timestamp tiebreaking,
   cursor continuation, malformed-cursor `400`, tampered-cursor `400`,
   filter-mismatch `422`, and last-page `nextCursor` shape.
@@ -169,6 +156,9 @@ DoD:
   are used; legacy single-column indexes are not chosen for the read path.
 - Migration drops `idx_audit_events_actor`, `idx_audit_events_resource`, and
   `idx_audit_events_timestamp`.
+- Migration uses `DROP INDEX CONCURRENTLY` when Flyway can run it
+  non-transactionally; otherwise it is scheduled as regular `DROP INDEX` during
+  an approved low-traffic maintenance window.
 - Existing integration tests for query and ingest paths remain green against
   the reduced index set.
 - `./gradlew test` passes.

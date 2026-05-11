@@ -10,22 +10,22 @@ sets.
 GET /audit-events?actor=u_42&resource=order/9f3b...&from=2026-04-01T00:00:00Z&to=2026-05-01T00:00:00Z&cursor=...&limit=50
 ```
 
-Illustrative response item, pending open questions on public `id` and
-actor/resource shape:
+Response item:
 
 ```json
 {
-  "id": "<event-id>",
+  "id": 12345,
   "occurredAt": "2026-04-17T11:02:14Z",
-  "actor": "<actor>",
-  "resource": "<resource>",
+  "actor": "u_42",
+  "resource": "order/9f3b",
   "action": "order.refunded",
   "outcome": "success",
   "payload": {}
 }
 ```
 
-Page response includes `items` and page-level `nextCursor`.
+Page response includes `items` and page-level `nextCursor`. On the last page,
+`nextCursor` is omitted.
 
 ## User Stories With AC
 
@@ -48,7 +48,7 @@ As an SRE or security analyst, I want to query actions on a resource, so that I
 can reconstruct an incident timeline.
 
 - When events are returned, the system shall order them by `occurredAt`
-  descending, with event `id` as the deterministic tiebreaker.
+  descending, with event `id` descending as the deterministic tiebreaker.
 - When the endpoint handles a read request, the system shall not mutate stored
   audit events.
 
@@ -68,29 +68,29 @@ result sets without loss or duplication.
 - When `limit` is supplied, the system shall compare it with the configured
   maximum.
 - When `limit` is omitted, the system shall apply the default page size.
+- When `limit` is greater than the configured maximum, the system shall return
+  `400 Bad Request`.
+- When `limit` is less than `1`, the system shall return `400 Bad Request`.
+- When `from` or `to` is supplied, the value shall be an ISO-8601 UTC instant.
 
 ## Out of Scope
 
 - Creating, updating, or deleting audit events through this API.
 - Archival retrieval.
 - Caller-selectable sort order.
+- Filtering by `outcome`, `action`, or `payload` contents.
+- Authentication and authorization changes.
 
 ## Open Questions
 
-- Default page size?
-- Maximum page size?
-- Should the event `id` tiebreaker sort ascending or descending?
-- Should `limit` above the configured maximum return `400 Bad Request` or be
-  clamped to the maximum?
-- Should the page response include extra metadata such as `limit` or `hasMore`?
-- Should filtering by `outcome`, `action`, or `payload` contents be supported?
-- Required format for `from`/`to` (ISO-8601 UTC only?) and response on malformed
-  timestamps?
-- Should there be a maximum allowed time range for `from`/`to`?
-- Representation of `nextCursor` on the last page — omitted, `null`, or empty
-  string?
-- Should response `id` be the numeric database id, or an opaque public id such
-  as a ULID?
-- Should `actor` and `resource` remain scalar response fields, or become
-  structured objects with `id` and `type`?
-- Authentication and authorization model for the endpoint?
+- None.
+
+## Fixed Decisions
+
+- Default page size is configurable via property; default value is `50`.
+- Maximum page size is configurable via property; default value is `200`.
+- There is no maximum `from`/`to` time-range span; pagination limits response
+  size.
+- Response `id` is the numeric database id.
+- `actor` and `resource` are scalar response fields.
+- Page response contains only `items` and `nextCursor`.

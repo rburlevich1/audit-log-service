@@ -13,9 +13,13 @@
 | `from`     | ISO-8601 instant | no       | Inclusive lower bound on `occurredAt`.               |
 | `to`       | ISO-8601 instant | no       | Inclusive upper bound on `occurredAt`.               |
 | `cursor`   | opaque string    | no       | Must come from an earlier call with identical filters; reuse across different filters returns `422`. |
-| `limit`    | integer          | no       | Page size; defaults and maximum are open questions.  |
+| `limit`    | integer          | no       | Page size; default `50`, maximum `200`.              |
 
 All filters AND together. Omitting filters returns the most recent page.
+Authentication and authorization changes are out of scope; the endpoint follows
+the service's existing security posture.
+Page-size values are configured as `audit.query.default-page-size` and
+`audit.query.max-page-size`, with defaults `50` and `200`.
 
 ### Response (`200 OK`)
 
@@ -23,7 +27,7 @@ All filters AND together. Omitting filters returns the most recent page.
 {
   "items": [
     {
-      "id": "<event-id>",
+      "id": 12345,
       "occurredAt": "2026-04-17T11:02:14Z",
       "actor":    "u_42",
       "resource": "order/9f3b",
@@ -36,26 +40,21 @@ All filters AND together. Omitting filters returns the most recent page.
 }
 ```
 
-`nextCursor` representation on the last page is an open question (see §5).
-The public `id` representation is an open requirement: it may be the numeric
-database id or a separate opaque id such as a ULID. The cursor design can use
-the database id internally either way.
-Structured `actor {id,type}` / `resource {id,type}` is not part of the contract
-until the type-discriminator question is resolved in requirements.
+`nextCursor` is omitted on the last page. Response `id` is the numeric database
+id. `actor` and `resource` are scalar strings.
 
 ### Status codes
 
 | Code | When                                                                                     |
 |------|------------------------------------------------------------------------------------------|
 | 200  | Query succeeded. Empty `items` is still 200.                                             |
-| 400  | Malformed syntax: unparseable timestamp, non-numeric `limit`, malformed cursor shape, invalid cursor signature. |
-| 422  | Parseable but semantically invalid: `from > to`; valid cursor used with different filters. `limit > max` listed as `400` placeholder pending open requirement (`400` vs clamp). |
+| 400  | Unparseable timestamp, non-numeric `limit`, `limit < 1`, `limit > configured max` (default `200`), malformed cursor shape, invalid cursor signature. |
+| 422  | Parseable but semantically invalid: `from > to`; valid cursor used with different filters. |
 
-`400` vs `422` rule: if the value cannot be parsed into the declared type, it
-is `400`. If it parses but violates a business rule, it is `422`. The
-`limit > max` row in both this table and §5 is a placeholder using `400` —
-requirements lists only two options (`400` or clamp); the final choice is
-open (see requirements.md).
+`400` vs `422` rule: if the value cannot be parsed into the declared type or
+violates the request contract (`limit < 1`, `limit > configured max`,
+malformed cursor), it is `400`. If it parses but is semantically inconsistent
+with other valid request values, it is `422`.
 For cursors: malformed shape or failed signature verification is `400`; a valid
 cursor whose embedded filter fingerprint does not match the current query is
 `422`.
@@ -76,9 +75,8 @@ Why keyset fits append-only audit events:
 
 Cursor encoding: the cursor carries the deterministic sort keys of the last
 row of the previous page — `(occurredAt, database id)` — plus a fingerprint of
-the filters used to create the cursor. The current database identifier is the
-`bigserial` primary key. Even if the public response `id` becomes a ULID-style
-identifier, the cursor can still use database id internally. Concretely,
+the filters used to create the cursor. The database identifier is the
+`bigserial` primary key and is also the public response `id`. Concretely,
 base64-url of a compact payload such as
 `"<occurredAt-epoch-millis>:<id>:<filter-fingerprint>"`.
 
@@ -89,29 +87,20 @@ collision between, e.g., `actor="a|b"` and `resource="c"` vs `actor="a"` and
 `resource="b|c"`. Output the first 16 bytes of the hash base64url-encoded.
 Empty filters hash deterministically (all-null tuple → one fixed value).
 
-Tamper detection: HMAC-SHA256 over the payload, server-side secret. The wire
-form is `<base64url(payload)>.<base64url(hmac)>`. The service rejects any
-cursor whose HMAC does not verify with the current server secret as `400`. A
-valid cursor whose filter fingerprint differs from the current query returns
-`422`. Alternative mechanisms (signed JWE, sealed box) satisfy the same
-requirement; HMAC is chosen for simplicity and zero external dependencies.
+Tamper detection: HMAC-SHA256 over the payload using
+`audit.query.cursor-secret`, bound from `AUDIT_QUERY_CURSOR_SECRET`. The
+application fails fast at startup if the secret is blank. The wire form is
+`<base64url(payload)>.<base64url(hmac)>`. The service rejects any cursor whose
+HMAC does not verify with the current server secret as `400`, using
+constant-time comparison. A valid cursor whose filter fingerprint differs from
+the current query returns `422`. The secret must never be logged. Secret
+rotation is out of scope for this feature.
 
-Continuation query if the tiebreaker direction is descending, cursor
-`(t*, i*)`:
+Continuation query with descending tiebreaker, cursor `(t*, i*)`:
 
 ```sql
 ... WHERE (event_timestamp, id) < (:t*, :i*)
 ORDER BY event_timestamp DESC, id DESC
-LIMIT :limit + 1
-```
-
-If requirements choose `id ASC` as the tiebreaker direction, use an expanded
-predicate:
-
-```sql
-... WHERE event_timestamp < :t*
-   OR (event_timestamp = :t* AND id > :i*)
-ORDER BY event_timestamp DESC, id ASC
 LIMIT :limit + 1
 ```
 
@@ -126,7 +115,7 @@ starts strictly past the prior page's last returned row.
 ## 3. Sort & Determinism
 
 - Primary sort: `occurredAt DESC` (newest first; required by requirements).
-- Tiebreaker: event database `id`. Direction is an open requirement.
+- Tiebreaker: event database `id DESC`.
 
 The tiebreaker is required because `occurredAt` is not guaranteed unique —
 two events can share a server timestamp. Without a tiebreaker, the row order
@@ -135,10 +124,8 @@ breaks keyset pagination: the cursor `(t*, i*)` could exclude a peer row
 with the same `t*` or include it twice. A unique secondary key restores a
 total order and makes the strict cursor comparison correct.
 
-The database `id` is the natural internal tiebreaker because it is unique,
-monotonic per writer, and already indexed as the primary key. If the API later
-needs a ULID-style public identifier, update requirements first; the cursor can
-still use database id internally.
+The database `id` is the natural tiebreaker because it is unique, monotonic per
+writer, already indexed as the primary key, and exposed as the response `id`.
 
 ## 4. Indexes
 
@@ -178,6 +165,9 @@ indexes as a follow-up task tied to this feature, with a defined trigger
 (e.g. "after one week in staging with `EXPLAIN` showing the new composites
 cover the read path") — otherwise the temporary seven-index state quietly
 becomes permanent and degrades ingest throughput.
+The cleanup migration should prefer `DROP INDEX CONCURRENTLY` where the Flyway
+execution mode supports a non-transactional migration; otherwise schedule a
+regular `DROP INDEX` during an approved low-traffic maintenance window.
 
 The actor+resource composite is included because the example request uses both
 filters and bitmap index intersection would not preserve the desired ordering;
@@ -186,9 +176,8 @@ it could force a sort before pagination.
 Time-range-only queries: served by `idx_audit_events_ts_id` (range scan on
 leading column).
 
-Index direction (`desc`) is written for the illustrated
-`occurredAt DESC, id DESC` plan. If requirements choose `id ASC`, define the
-same indexes with `event_timestamp desc, id asc` instead.
+Index direction matches the fixed deterministic order:
+`occurredAt DESC, id DESC`.
 
 ## 5. Validation Rules and Edge Cases
 
@@ -198,37 +187,23 @@ same indexes with `event_timestamp desc, id asc` instead.
 | `from`, `to` ISO-8601 instant     | 400 on parse failure.              |
 | `from <= to` when both present    | 422.                               |
 | `limit` is a positive integer     | 400 on parse failure.              |
-| `limit` within `[1, max]`         | 400 placeholder (or clamp — open requirement). |
+| `limit` within `[1, max]`         | 400 on violation; default max is 200. |
 | `cursor` decodes and verifies     | 400 on malformed or tampered.      |
 | Cursor filter fingerprint matches | 422 on mismatch.                   |
 
 Edge cases:
 
-- **Empty result page**: `200 OK` with `items: []`. `nextCursor` omitted (or
-  `null` / `""` — pending requirements open question).
+- **Empty result page**: `200 OK` with `items: []` and omitted `nextCursor`.
 - **Last (terminal) page**: returned `items` may be shorter than `limit`;
-  `nextCursor` representation pending requirements open question. Whichever
-  representation wins, the response model needs the matching Jackson setting
-  (`@JsonInclude(NON_NULL)` for "omitted", default for explicit `null`,
-  custom serializer for `""`) so the wire form does not accidentally drift
-  from the chosen semantics.
+  `nextCursor` is omitted via `@JsonInclude(NON_NULL)` or equivalent response
+  serialization.
 - **Cursor pointing past the end**: returns `items: []` with no `nextCursor`,
   same as the last-page case.
 - **Concurrent inserts during paging**: new rows always have larger
   `(occurredAt, id)` than any in-flight cursor, so they appear only on
   pages fetched *before* their cursor — never as duplicates on later pages.
 
-Open design questions specific to this design (not yet in requirements.md):
-
-- **Maximum time-range span**: a single query covering years of data can
-  fan out across many partitions / produce large pages. Cap `to - from` at
-  some configurable maximum? Not in requirements.
-- **Structured actor/resource shape**: requirements examples show
-  `actor{id,type}` / `resource{id,type}`, but storage currently has scalar
-  `actor` / `resource`. This design keeps scalar response fields for now. If
-  structured objects are required, decide the source of `type` in requirements:
-  derive from a prefix convention, or add `actor_type` / `resource_type`
-  columns.
+There is no maximum allowed `from`/`to` span. Pagination limits response size.
 
 ## 6. Layer Integration
 
@@ -255,12 +230,14 @@ Per-layer responsibilities for this feature:
     domain results. No JPA types, no Specifications, no SQL leakage.
   - Map storage fields → response fields (`id` → `id`,
     `event_timestamp` → `occurredAt`, `context` → `payload`).
+  - Controllers must not return JPA entity types. Add or keep an architecture
+    test that enforces this for controller method return types.
 
-  Semantic failures (`from > to`, `limit > max` if the final requirement
-  rejects instead of clamps, decoded-cursor inconsistent with current filters)
-  are not the controller's job; they are caught in the service layer and mapped
-  to `422` by the same advice. This split keeps the boundary clean: 400 = "I
-  cannot read what you sent", 422 = "I read it but it does not make sense."
+  Semantic failures (`from > to`, decoded-cursor inconsistent with current
+  filters) are not the controller's job; they are caught in the service layer
+  and mapped to `422` by the same advice. This split keeps the boundary clean:
+  400 = "I cannot read what you sent or it violates the request contract",
+  422 = "I read it but it does not make sense with the rest of the request."
 
 - **Application layer (`AuditEventService`)**
   - Define a `AuditEventQuery` value object: filters, decoded cursor keys,
@@ -271,8 +248,8 @@ Per-layer responsibilities for this feature:
     filter fingerprint does not match the current query with a typed exception
     mapped to `422`.
   - Call the repository, return a domain `Page<AuditEvent>` with a typed
-    `Cursor` next-pointer (not a string). Encoding to the response string
-    happens at the boundary.
+    `Cursor` next-pointer (not a string). The service owns page assembly and
+    cursor encoding; the controller maps the domain page to the response DTO.
 
 - **Infrastructure layer (`AuditEventRepository`)**
   - Add a keyset query: either a typed query method, or a `Specification`
@@ -290,11 +267,9 @@ supplemented by a paged variant).
 |----------------------------------------------------------|-------------------------------|
 | Read-only query endpoint                                 | `GET /audit-events` only; no write paths added; no mutation in service or repository on the read path. |
 | Append-only audit events                                 | No UPDATE / DELETE introduced; cursor strategy explicitly depends on rows never shifting. |
-| No UPDATE / DELETE behavior                              | Repository changes are read-only (`Specification` queries + sort); no destructive operations. |
+| No UPDATE / DELETE behavior                              | Repository changes are read-only (`Specification` queries + sort); no destructive operations; invariant tests target `/audit-events` write methods. |
 | Deterministic ordering with explicit tiebreaker (§3)     | `occurredAt DESC` + database `id` tiebreaker; indexes built to match the chosen direction; cursor encodes both keys. |
 
-The requirements document remains the source of truth. Where this design
-encountered decisions not fixed by requirements (maximum time-range span,
-type-discriminator origin, public id representation, `limit > max` behavior,
-`nextCursor` shape on last page, tiebreaker direction), they are flagged as
-open and routed back to `requirements.md` before any implementation begins.
+The requirements document remains the source of truth. The current requirements
+fix page size, tiebreaker direction, last-page cursor representation, public id,
+actor/resource shape, timestamp parsing, and limit validation for this design.
