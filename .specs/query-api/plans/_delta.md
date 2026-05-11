@@ -344,3 +344,28 @@
 - `tasks.md`: T4 DoD now requires query endpoint return type to avoid JPA
   entities.
 - `plans/T4-plan.md`: constraints and verification aligned with this scope.
+
+## Дополнение при реализации T6
+
+Обнаружено: `TestRestTemplate` поверх JDK `HttpURLConnection` не умеет
+отправлять `PATCH` (`java.net.ProtocolException: Invalid HTTP method:
+PATCH`). Первая итерация T6 покрыла `PATCH` только build-time проверкой
+(reflection-тест `auditEventControllerHasNoUpdateOrDeleteRoutes`), а
+runtime `404`/`405` для `PATCH /audit-events` остался непроверенным,
+несмотря на DoD в `tasks.md` § T6 и в плане T6 ("PUT/PATCH/DELETE
+against `/audit-events` return `404` or `405`").
+
+Решение: использовать отдельный `RestTemplate` поверх
+`JdkClientHttpRequestFactory` (Spring 6.1, без новых зависимостей) и
+no-op error handler специально для `PATCH`. Существующие `PUT`/`DELETE`
+продолжают идти через `TestRestTemplate`.
+
+Куда внесено:
+
+- `AuditEventInvariantsTest.writeRoutesOnAuditEventsAreRejected` теперь
+  явно проверяет `PUT`, `PATCH`, `DELETE` все возвращают `404`/`405`.
+- `requirements.md`, `design.md`, `tasks.md` не менялись: контракт уже
+  требовал `PATCH` returns `404/405`; это была только реализационная
+  лакуна.
+- `_delta.md` фиксирует выбор JDK HTTP client как невинноване решение
+  на тестовом уровне; продакшен код не изменён.

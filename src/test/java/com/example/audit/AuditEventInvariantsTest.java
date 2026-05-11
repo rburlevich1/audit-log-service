@@ -20,9 +20,13 @@ import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpMethod;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.client.ClientHttpResponse;
+import org.springframework.http.client.JdkClientHttpRequestFactory;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.DynamicPropertyRegistry;
 import org.springframework.test.context.DynamicPropertySource;
+import org.springframework.web.client.DefaultResponseErrorHandler;
+import org.springframework.web.client.RestTemplate;
 import org.testcontainers.containers.PostgreSQLContainer;
 import org.testcontainers.containers.wait.strategy.Wait;
 import org.testcontainers.junit.jupiter.Container;
@@ -131,9 +135,11 @@ class AuditEventInvariantsTest {
             "resource", "r",
             "outcome", "success");
     ResponseEntity<String> put = exchange(HttpMethod.PUT, body);
+    ResponseEntity<String> patch = patch(body);
     ResponseEntity<String> delete = exchange(HttpMethod.DELETE, null);
 
     assertThat(put.getStatusCode()).isIn(HttpStatus.NOT_FOUND, HttpStatus.METHOD_NOT_ALLOWED);
+    assertThat(patch.getStatusCode()).isIn(HttpStatus.NOT_FOUND, HttpStatus.METHOD_NOT_ALLOWED);
     assertThat(delete.getStatusCode()).isIn(HttpStatus.NOT_FOUND, HttpStatus.METHOD_NOT_ALLOWED);
   }
 
@@ -215,6 +221,19 @@ class AuditEventInvariantsTest {
   private ResponseEntity<String> exchange(HttpMethod method, Map<String, Object> body) {
     HttpEntity<?> entity = body == null ? HttpEntity.EMPTY : new HttpEntity<>(body);
     return restTemplate.exchange(baseUrl() + "/audit-events", method, entity, String.class);
+  }
+
+  private ResponseEntity<String> patch(Map<String, Object> body) {
+    RestTemplate template = new RestTemplate(new JdkClientHttpRequestFactory());
+    template.setErrorHandler(
+        new DefaultResponseErrorHandler() {
+          @Override
+          public boolean hasError(ClientHttpResponse response) {
+            return false;
+          }
+        });
+    return template.exchange(
+        baseUrl() + "/audit-events", HttpMethod.PATCH, new HttpEntity<>(body), String.class);
   }
 
   @SuppressWarnings("unchecked")
