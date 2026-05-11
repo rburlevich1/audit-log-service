@@ -24,20 +24,22 @@ Used by compliance officers, SREs, and security analysts.
 
 ### Event fields
 
-| Field       | Description                              |
-|-------------|------------------------------------------|
-| `timestamp` | When the event occurred — server-assigned |
+| Field       | Description                                             |
+|-------------|---------------------------------------------------------|
+| `timestamp` | When the event occurred — server-assigned               |
 | `actor`     | Who initiated it (user id / service account) — required |
-| `action`    | What happened (`resource.updated`, `user.login`, etc.) |
-| `resource`  | What it affected (`project:42`, `invoice:777`) |
-| `outcome`   | Result: `success`, `denied`, or `error` |
-| `context`   | Arbitrary JSON with details |
+| `action`    | What happened (`resource.updated`, `user.login`, etc.)  |
+| `resource`  | What it affected (`project:42`, `invoice:777`)          |
+| `outcome`   | Result: `success`, `denied`, or `error`                 |
+| `context`   | Arbitrary JSON with details                             |
 
 
 ### Invariants
 - Append-only: no UPDATE, no DELETE endpoints.
 - `timestamp` is always set by the server, never by the caller.
 - `actor` is required — reject requests without it.
+- Every list endpoint must return results in a deterministic order, with an
+  explicit tiebreaker when the primary sort key is not unique.
 
 
 ### Retention policy
@@ -55,6 +57,17 @@ Tamper-evidence via hash chain.
 - Do not edit `AGENTS.md` unless the user explicitly asks for it.
 - When the user asks to push changes, create a new branch, push that branch to GitHub,
   and open a pull request targeting `master`.
+
+
+## Specification workflow
+
+- Feature specifications live under `.specs/<feature>/`.
+- Write specifications in English.
+- Use EARS-style acceptance criteria.
+- Before writing a specification, ask 5–7 clarifying questions to remove
+  ambiguity.
+- The specification is the source of truth. When requirements are missing or
+  unclear, update the specification first, then update the code.
 
 
 ## Testing
