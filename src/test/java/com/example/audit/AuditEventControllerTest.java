@@ -265,6 +265,42 @@ class AuditEventControllerTest {
   }
 
   @Test
+  void appliesDefaultPageSizeWhenLimitIsOmitted() {
+    String actor = "default-size:user";
+    Instant base = Instant.parse("2026-02-01T00:00:00Z");
+    for (int i = 0; i < 51; i++) {
+      insertEventDirect(actor, "r:default-size", base.plusSeconds(i));
+    }
+
+    ResponseEntity<Map<String, Object>> response = get("/audit-events?actor=" + actor);
+
+    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    assertThat(items(response)).hasSize(50);
+    assertThat(response.getBody().get("nextCursor")).isNotNull();
+  }
+
+  @Test
+  void timeRangeBoundsAreInclusiveOnBothEnds() {
+    String actor = "boundary:user";
+    Instant from = Instant.parse("2026-06-01T00:00:00Z");
+    Instant to = Instant.parse("2026-06-02T00:00:00Z");
+
+    Long idAtFrom = insertEventDirect(actor, "r:bound", from);
+    Long idAtTo = insertEventDirect(actor, "r:bound", to);
+    Long idBefore = insertEventDirect(actor, "r:bound", from.minusSeconds(1));
+    Long idAfter = insertEventDirect(actor, "r:bound", to.plusSeconds(1));
+
+    ResponseEntity<Map<String, Object>> response =
+        get("/audit-events?actor=" + actor + "&from=" + from + "&to=" + to);
+
+    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    List<Long> ids =
+        items(response).stream().map(item -> ((Number) item.get("id")).longValue()).toList();
+    assertThat(ids).contains(idAtFrom, idAtTo);
+    assertThat(ids).doesNotContain(idBefore, idAfter);
+  }
+
+  @Test
   void lastPageOmitsNextCursor() {
     String actor = "paging:last";
     post(
