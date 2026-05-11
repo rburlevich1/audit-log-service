@@ -400,3 +400,13 @@ production не существует), команде нужно явно реш
   legacy индексы отсутствуют.
 - `requirements.md`, `design.md`, `tasks.md` не менялись: gate остаётся
   процессным требованием.
+
+### Resolution
+
+Команда выбрала вариант 1: gate релаксирован. `tasks.md` § T7 и
+`plans/T7-plan.md` переписаны под локальную верификацию через
+Testcontainers вместо staging `EXPLAIN ANALYZE`. PR #18 переведён из
+draft в ready-for-review. Production deployment strategy
+(`DROP INDEX` vs `DROP INDEX CONCURRENTLY`, maintenance windows)
+осталась за deployer'ом и не блокирует merge в этом репозитории, где
+production environment отсутствует.
