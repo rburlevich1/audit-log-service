@@ -64,16 +64,13 @@ class AuditEventControllerTest {
     assertThat(created.getBody()).containsEntry("resource", "project:42");
     assertThat(created.getBody()).containsKey("timestamp");
 
-    ResponseEntity<java.util.List<Map<String, Object>>> found =
-        restTemplate.exchange(
-            baseUrl() + "/audit-events?actor=user:123&resource=project:42",
-            HttpMethod.GET,
-            HttpEntity.EMPTY,
-            new ParameterizedTypeReference<>() {});
+    ResponseEntity<Map<String, Object>> found =
+        get("/audit-events?actor=user:123&resource=project:42");
 
     assertThat(found.getStatusCode()).isEqualTo(HttpStatus.OK);
-    assertThat(found.getBody()).hasSize(1);
-    assertThat(found.getBody().getFirst()).containsEntry("actor", "user:123");
+    assertThat(items(found)).hasSize(1);
+    assertThat(items(found).getFirst()).containsEntry("actor", "user:123");
+    assertThat(found.getBody()).doesNotContainKey("nextCursor");
   }
 
   @Test
@@ -132,10 +129,10 @@ class AuditEventControllerTest {
                 "context", Map.of("version", 1)));
     assertThat(created.getStatusCode()).isEqualTo(HttpStatus.CREATED);
 
-    ResponseEntity<java.util.List<Map<String, Object>>> beforeMutation =
+    ResponseEntity<Map<String, Object>> beforeMutation =
         get("/audit-events?actor=immutable:user&resource=immutable:resource");
-    assertThat(beforeMutation.getBody()).hasSize(1);
-    Map<String, Object> storedEvent = beforeMutation.getBody().getFirst();
+    assertThat(items(beforeMutation)).hasSize(1);
+    Map<String, Object> storedEvent = items(beforeMutation).getFirst();
 
     Map<String, Object> mutation =
         Map.of(
@@ -155,12 +152,59 @@ class AuditEventControllerTest {
     assertThat(put.getStatusCode()).isIn(HttpStatus.NOT_FOUND, HttpStatus.METHOD_NOT_ALLOWED);
     assertThat(delete.getStatusCode()).isIn(HttpStatus.NOT_FOUND, HttpStatus.METHOD_NOT_ALLOWED);
 
-    ResponseEntity<java.util.List<Map<String, Object>>> found =
+    ResponseEntity<Map<String, Object>> found =
         get("/audit-events?actor=immutable:user&resource=immutable:resource");
 
     assertThat(found.getStatusCode()).isEqualTo(HttpStatus.OK);
-    assertThat(found.getBody()).hasSize(1);
-    assertThat(found.getBody().getFirst()).isEqualTo(storedEvent);
+    assertThat(items(found)).hasSize(1);
+    assertThat(items(found).getFirst()).isEqualTo(storedEvent);
+  }
+
+  @Test
+  void acceptsEmptyQueryFilters() {
+    ResponseEntity<Map<String, Object>> response = get("/audit-events");
+
+    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.OK);
+    assertThat(response.getBody()).containsKey("items");
+    assertThat(response.getBody()).doesNotContainKey("nextCursor");
+  }
+
+  @Test
+  void rejectsMalformedTimestamp() {
+    ResponseEntity<Map<String, Object>> response = get("/audit-events?from=not-a-timestamp");
+
+    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+  }
+
+  @Test
+  void rejectsNonNumericLimit() {
+    ResponseEntity<Map<String, Object>> response = get("/audit-events?limit=abc");
+
+    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+  }
+
+  @Test
+  void rejectsLimitOutsideConfiguredRange() {
+    ResponseEntity<Map<String, Object>> tooSmall = get("/audit-events?limit=0");
+    ResponseEntity<Map<String, Object>> tooLarge = get("/audit-events?limit=201");
+
+    assertThat(tooSmall.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+    assertThat(tooLarge.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+  }
+
+  @Test
+  void rejectsCursorUntilPaginationIsImplemented() {
+    ResponseEntity<Map<String, Object>> response = get("/audit-events?cursor=abc");
+
+    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.BAD_REQUEST);
+  }
+
+  @Test
+  void rejectsInvertedTimeRange() {
+    ResponseEntity<Map<String, Object>> response =
+        get("/audit-events?from=2026-05-01T00:00:00Z&to=2026-04-01T00:00:00Z");
+
+    assertThat(response.getStatusCode()).isEqualTo(HttpStatus.UNPROCESSABLE_ENTITY);
   }
 
   private ResponseEntity<Map<String, Object>> post(Map<String, Object> request) {
@@ -171,9 +215,14 @@ class AuditEventControllerTest {
         new ParameterizedTypeReference<>() {});
   }
 
-  private ResponseEntity<java.util.List<Map<String, Object>>> get(String path) {
+  private ResponseEntity<Map<String, Object>> get(String path) {
     return restTemplate.exchange(
         baseUrl() + path, HttpMethod.GET, HttpEntity.EMPTY, new ParameterizedTypeReference<>() {});
+  }
+
+  @SuppressWarnings("unchecked")
+  private List<Map<String, Object>> items(ResponseEntity<Map<String, Object>> response) {
+    return (List<Map<String, Object>>) response.getBody().get("items");
   }
 
   private String baseUrl() {
