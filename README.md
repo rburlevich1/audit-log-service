@@ -6,8 +6,10 @@ It stores events in PostgreSQL, manages schema changes with Flyway, and exposes 
 The current implementation supports:
 
 - Creating audit events with server-assigned timestamps.
-- Searching audit events by actor, resource, and timestamp range.
-- Storing arbitrary JSON context data in PostgreSQL `jsonb`.
+- Querying audit events by actor, resource, and inclusive `from`/`to` time range.
+- Keyset (cursor) pagination over query results, with HMAC-signed cursors and constant-time signature verification.
+- Deterministic newest-first ordering by `occurredAt` with `id` as the deterministic tiebreaker.
+- Storing arbitrary JSON payload data in PostgreSQL `jsonb`.
 - Enforcing append-only behavior at the HTTP API level by exposing no update or delete routes.
 - Running a scheduled retention job that calculates and logs the archival cutoff.
 - Integration testing against PostgreSQL through Testcontainers.
@@ -32,14 +34,13 @@ Audit events are stored in the `audit_events` table.
 
 | Field | Required | Source | Description |
 | --- | --- | --- | --- |
-| `timestamp` | Yes | Server | Time when the event was accepted by the service. Callers cannot set this value. |
+| `id` | Auto | Database | `bigserial` primary key, surfaced as a numeric `id` in Query API responses. |
+| `event_timestamp` | Yes | Server | Time when the event was accepted by the service. Callers cannot set this value. Exposed as `occurredAt` on query responses and as `timestamp` on the ingest response. |
 | `actor` | Yes | Request | User, service account, or system component that initiated the action. |
 | `action` | No | Request | Action that occurred, such as `resource.updated` or `user.login`. |
 | `resource` | No | Request | Resource affected by the action, such as `project:42` or `invoice:777`. |
 | `outcome` | No | Request | Result of the action. If present, must be `success`, `denied`, or `error`. |
-| `context` | No | Request | Arbitrary JSON object or value with additional event details. Stored as `jsonb`. |
-
-The database also has an internal `id` primary key. The service does not include `id` in API responses.
+| `context` | No | Request | Arbitrary JSON object or value with additional event details. Stored as `jsonb`. Exposed as `payload` on query responses. |
 
 ## HTTP API
 
@@ -93,65 +94,71 @@ Validation rules:
 - `timestamp` is ignored if supplied by the caller. The service always assigns the current server time.
 - Unknown JSON fields are ignored.
 
-Example invalid request:
-
-```json
-{
-  "action": "user.login",
-  "resource": "session:1",
-  "outcome": "denied"
-}
-```
-
-This returns `400 Bad Request` because `actor` is missing.
-
-### Search Audit Events
+### Query Audit Events
 
 ```http
 GET /audit-events
 ```
 
-Supported query parameters:
+Read-only endpoint. All filter parameters are optional and AND together.
 
-| Parameter | Required | Matching behavior |
+| Parameter | Type | Notes |
 | --- | --- | --- |
-| `actor` | No | Exact match. Blank values are ignored. |
-| `resource` | No | Exact match. Blank values are ignored. |
-| `from` | No | Inclusive lower bound for `timestamp`. ISO-8601 date-time. |
-| `to` | No | Inclusive upper bound for `timestamp`. ISO-8601 date-time. |
+| `actor` | string | Exact match. Blank values are ignored. |
+| `resource` | string | Exact match. Blank values are ignored. |
+| `from` | ISO-8601 instant | Inclusive lower bound on `occurredAt`. |
+| `to` | ISO-8601 instant | Inclusive upper bound on `occurredAt`. |
+| `cursor` | opaque string | Continues a prior page; must come from an earlier response under identical filters. |
+| `limit` | integer | Page size. Defaults to 50; must be in `[1, 200]`. |
 
-Example:
-
-```http
-GET /audit-events?actor=user:123&resource=project:42
-```
-
-Example with time range:
+Example request:
 
 ```http
-GET /audit-events?from=2026-04-01T00:00:00Z&to=2026-04-28T23:59:59Z
+GET /audit-events?actor=u_42&resource=order/9f3b&from=2026-04-01T00:00:00Z&to=2026-05-01T00:00:00Z&limit=50
 ```
 
 Example response:
 
 ```json
-[
-  {
-    "timestamp": "2026-04-28T10:15:30.123456Z",
-    "actor": "user:123",
-    "action": "resource.updated",
-    "resource": "project:42",
-    "outcome": "success",
-    "context": {
-      "ip": "127.0.0.1"
+{
+  "items": [
+    {
+      "id": 12345,
+      "occurredAt": "2026-04-17T11:02:14Z",
+      "actor": "u_42",
+      "resource": "order/9f3b",
+      "action": "order.refunded",
+      "outcome": "success",
+      "payload": {}
     }
-  }
-]
+  ],
+  "nextCursor": "ZXlKdmNtUmxja0o1SWpwN0lt....abc"
+}
 ```
 
-The current implementation does not define explicit sorting or pagination.
+`nextCursor` is present only when more results exist. On the last page it is omitted from the response.
 
-## Append-Only Behavior
+Sort order is fixed: `occurredAt DESC` with `id DESC` as the deterministic tiebreaker. Callers cannot select a different order.
+
+#### Cursor Format
+
+Cursors are opaque to the client. The server encodes them as `<base64url(payload)>.<base64url(hmac)>` where:
+
+- The payload carries `(occurredAt-epoch-millis, id, filter-fingerprint)`.
+- The filter fingerprint is a SHA-256 of the canonical `(actor, resource, from, to)` tuple, joined with the ASCII unit separator (`\x1f`), truncated to 16 bytes and base64url-encoded.
+- The signature is HMAC-SHA256 of the payload under the server's `audit.query.cursor-secret`, verified with a constant-time comparison.
+
+The cursor secret must be supplied via the `AUDIT_QUERY_CURSOR_SECRET` environment variable. The application fails fast at startup if the secret is blank.
+
+#### Status Codes
+
+| Code | When |
+| --- | --- |
+| `200 OK` | Query succeeded. Empty `items` is still `200`. |
+| `400 Bad Request` | Unparseable `from`/`to`, non-numeric `limit`, `limit < 1`, `limit > 200`, malformed cursor shape, or invalid cursor signature. |
+| `422 Unprocessable Entity` | `from > to`; valid cursor used with different filters than it was issued for. |
+
+### Append-Only Behavior
 
 The service is designed as an append-only audit log.
 
@@ -159,15 +166,17 @@ Current enforcement:
 
 - There are no `PUT`, `PATCH`, or `DELETE` endpoints for audit events.
 - Entity fields are mapped with `updatable = false`.
-- Tests assert that update and delete requests are rejected with `404 Not Found` or `405 Method Not Allowed`.
+- ArchUnit asserts at build time that `AuditEventController` declares no `@PutMapping`, `@PatchMapping`, or `@DeleteMapping`.
+- Integration tests assert that `PUT`, `PATCH`, and `DELETE` requests are rejected with `404 Not Found` or `405 Method Not Allowed`.
+- Invariant tests snapshot the table before and after representative GET queries and assert byte-for-byte equality.
 
 Events can be created and read, but not changed through the exposed API.
 
 ## Persistence
 
-Flyway creates the schema in `src/main/resources/db/migration/V1__create_audit_events.sql`.
+Flyway creates the schema in `src/main/resources/db/migration/`.
 
-Table:
+Initial table (V1):
 
 ```sql
 create table audit_events (
@@ -181,11 +190,18 @@ create table audit_events (
 );
 ```
 
-Indexes:
+Composite indexes added by V2 to support the Query API filter combinations plus the deterministic sort and the keyset cursor predicate:
 
-- `idx_audit_events_actor` on `actor`
-- `idx_audit_events_resource` on `resource`
-- `idx_audit_events_timestamp` on `event_timestamp`
+```sql
+create index idx_audit_events_ts_id
+    on audit_events (event_timestamp desc, id desc);
+create index idx_audit_events_actor_ts_id
+    on audit_events (actor, event_timestamp desc, id desc);
+create index idx_audit_events_resource_ts_id
+    on audit_events (resource, event_timestamp desc, id desc);
+create index idx_audit_events_actor_resource_ts_id
+    on audit_events (actor, resource, event_timestamp desc, id desc);
+```
 
 Spring Boot is configured with `spring.jpa.hibernate.ddl-auto=validate`, so Hibernate validates the mapped schema instead of creating or changing it.
 
@@ -202,13 +218,6 @@ current UTC time - audit.retention.days
 It currently logs that audit events older than the cutoff are ready for archival.
 It does not currently move, delete, or archive records.
 
-Configuration:
-
-| Property | Environment variable | Default |
-| --- | --- | --- |
-| `audit.retention.days` | `AUDIT_RETENTION_DAYS` | `90` |
-| `audit.retention.cron` | `AUDIT_RETENTION_CRON` | `0 0 2 * * *` |
-
 ## Configuration
 
 Application configuration is in `src/main/resources/application.yml`.
@@ -218,8 +227,13 @@ Application configuration is in `src/main/resources/application.yml`.
 | `spring.datasource.url` | `DATABASE_URL` | `jdbc:postgresql://localhost:5432/audit_log` |
 | `spring.datasource.username` | `DATABASE_USERNAME` | `audit` |
 | `spring.datasource.password` | `DATABASE_PASSWORD` | `audit` |
+| `audit.retention.days` | `AUDIT_RETENTION_DAYS` | `90` |
+| `audit.retention.cron` | `AUDIT_RETENTION_CRON` | `0 0 2 * * *` |
+| `audit.query.cursor-secret` | `AUDIT_QUERY_CURSOR_SECRET` | _required, no default_ |
+| `audit.query.default-page-size` | `AUDIT_QUERY_DEFAULT_PAGE_SIZE` | `50` |
+| `audit.query.max-page-size` | `AUDIT_QUERY_MAX_PAGE_SIZE` | `200` |
 
-Flyway is enabled by default.
+Flyway is enabled by default. The application refuses to start if `audit.query.cursor-secret` is blank.
 
 ## Running Locally
 
@@ -228,7 +242,7 @@ Flyway is enabled by default.
 The helper script starts a PostgreSQL 16 container on host networking, exports the required datasource variables, and starts the Spring Boot app.
 
 ```bash
-./run-app.sh
+AUDIT_QUERY_CURSOR_SECRET=dev-only-secret ./run-app.sh
 ```
 
 Defaults used by the script:
@@ -251,10 +265,10 @@ Start PostgreSQL:
 docker compose up -d postgres
 ```
 
-Then run the application:
+Then run the application with the required cursor secret:
 
 ```bash
-./gradlew bootRun
+AUDIT_QUERY_CURSOR_SECRET=dev-only-secret ./gradlew bootRun
 ```
 
 The Compose database listens on `localhost:5432` and matches the default datasource configuration:
@@ -293,21 +307,32 @@ Search by time range:
 curl -i 'http://localhost:8080/audit-events?from=2026-04-01T00:00:00Z&to=2026-04-28T23:59:59Z'
 ```
 
+Walk a paginated result set:
+
+```bash
+curl -i 'http://localhost:8080/audit-events?actor=user:123&limit=50'
+# response includes "nextCursor": "..." when more results exist
+curl -i 'http://localhost:8080/audit-events?actor=user:123&limit=50&cursor=<nextCursor-from-previous-response>'
+```
+
 ## Testing
 
 Run the full test suite:
 
 ```bash
-./gradlew test
+AUDIT_QUERY_CURSOR_SECRET=test-secret ./gradlew test
 ```
 
 The tests include:
 
 - Endpoint integration tests using a real PostgreSQL container.
-- Validation checks for required `actor`.
-- Invariant checks that caller-supplied `timestamp` is ignored.
-- Invariant checks that update and delete routes are not available.
-- Append-only behavior checks that stored events are unchanged after rejected mutation attempts.
+- Validation checks for required `actor` on ingest.
+- Invariant checks that caller-supplied `timestamp` is ignored on ingest.
+- Invariant checks that update and delete routes are not available, at both runtime (`PUT`, `PATCH` via a JDK `HttpClient`-backed `RestTemplate`, `DELETE`) and build time (ArchUnit reflection on the controller).
+- Append-only checks that table contents are unchanged before and after representative GET queries (full row snapshot via `JdbcTemplate`).
+- Deterministic-ordering checks (`occurredAt DESC`, `id DESC` tiebreaker), including same-timestamp rows and reproducible paginated walks.
+- Cursor unit tests covering encode/decode round-trip, tampered signature, wrong secret, missing or empty signature segment, and non-base64 payload.
+- Filter-fingerprint unit tests covering null-tuple stability, delimiter-collision avoidance, and base64url output shape.
 - ArchUnit tests for package and layer boundaries.
 
 Testcontainers is configured with Ryuk disabled through:
@@ -315,13 +340,14 @@ Testcontainers is configured with Ryuk disabled through:
 - `tasks.withType<Test> { environment("TESTCONTAINERS_RYUK_DISABLED", "true") }`
 - `src/test/resources/testcontainers.properties`
 
-The PostgreSQL test container uses host networking and an available local port selected at test startup.
+The PostgreSQL test container uses host networking and an available local port selected at test startup. The integration test classes register `audit.query.cursor-secret` via `@DynamicPropertySource` so the application context can start under test.
 
 ## Architecture
 
 Main packages:
 
-- `com.example.audit.event`: audit event entity, request DTO, repository, service, and REST controller.
+- `com.example.audit.event`: audit event entity, request DTO, response DTO and mapper, repository (with a custom keyset query fragment), service, REST controller, and exception advice.
+- `com.example.audit.event.cursor`: cursor payload, filter fingerprint, HMAC codec, and the three typed cursor exceptions.
 - `com.example.audit.retention`: scheduled retention cutoff job.
 
 Layering rules are enforced by ArchUnit:
@@ -329,8 +355,13 @@ Layering rules are enforced by ArchUnit:
 - Controllers must not access repositories directly.
 - Repositories should only be accessed by services.
 - Services must not depend on controllers.
+- The query endpoint must not return JPA entity types — controller return type is `AuditEventPageResponse`, never `AuditEvent`.
 - The `event` package must not depend on the `retention` package.
 - The `retention` package must not depend on the `event` package.
+
+## Specifications
+
+Feature specifications live under `.specs/<feature>/`. The Query API spec is in `.specs/query-api/` and contains the requirements, design, per-task plans, and evaluation reports for the current implementation.
 
 ## Current Limitations
 
@@ -338,7 +369,8 @@ The following items are not implemented in the current codebase:
 
 - Actual archival or deletion of events after the retention cutoff.
 - Tamper-evidence through hash chaining.
-- Pagination or explicit sorting for search results.
 - Authentication or authorization.
-- Filtering by `action`, `outcome`, or `context`.
+- Filtering by `action`, `outcome`, or `payload` contents.
+- Caller-selectable sort order.
 - OpenAPI or Swagger documentation.
+- Cursor-signing secret rotation.
