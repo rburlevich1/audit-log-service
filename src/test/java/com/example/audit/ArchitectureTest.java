@@ -14,7 +14,10 @@ import com.tngtech.archunit.junit.ArchTest;
 import com.tngtech.archunit.lang.ArchRule;
 import java.lang.reflect.ParameterizedType;
 import org.junit.jupiter.api.Test;
+import org.springframework.web.bind.annotation.DeleteMapping;
 import org.springframework.web.bind.annotation.GetMapping;
+import org.springframework.web.bind.annotation.PatchMapping;
+import org.springframework.web.bind.annotation.PutMapping;
 
 @AnalyzeClasses(
     packages = "com.example.audit",
@@ -87,5 +90,20 @@ class ArchitectureTest {
     var itemType = ((ParameterizedType) items.getGenericType()).getActualTypeArguments()[0];
     assertThat(itemType).isEqualTo(AuditEventResponse.class);
     assertThat(itemType).isNotEqualTo(AuditEvent.class);
+  }
+
+  @Test
+  void auditEventControllerHasNoUpdateOrDeleteRoutes() {
+    for (var method : AuditEventController.class.getDeclaredMethods()) {
+      assertThat(method.isAnnotationPresent(PutMapping.class))
+          .as("method %s must not be @PutMapping", method.getName())
+          .isFalse();
+      assertThat(method.isAnnotationPresent(PatchMapping.class))
+          .as("method %s must not be @PatchMapping", method.getName())
+          .isFalse();
+      assertThat(method.isAnnotationPresent(DeleteMapping.class))
+          .as("method %s must not be @DeleteMapping", method.getName())
+          .isFalse();
+    }
   }
 }
