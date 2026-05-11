@@ -66,8 +66,14 @@ Tamper-evidence via hash chain.
 - Use EARS-style acceptance criteria.
 - Before writing a specification, ask 5–7 clarifying questions to remove
   ambiguity.
-- The specification is the source of truth. When requirements are missing or
-  unclear, update the specification first, then update the code.
+- The specification is the source of truth. If during implementation a gap or
+  ambiguity surfaces in `requirements.md`, `design.md`, `tasks.md`, or any
+  per-task plan, update the spec first and only then update the code.
+- If an agent in plan mode (or any LLM-driven planning step) tries to fill a
+  gap by inventing a decision, record (append) the invented decision in
+  `.specs/<feature>/_delta.md` and resolve whether it belongs in the spec
+  before any code is written. Do not silently let invented decisions enter
+  the codebase.
 
 
 ## Testing
@@ -75,6 +81,8 @@ Tamper-evidence via hash chain.
 ### Rules — no exceptions
 
 - Every new feature or endpoint must ship with tests.
+- Verification is not a formality. A task is verified only when
+  the listed tests exist and pass — code that compiles is not verification.
 - All tests must be green before considering a task done.
 - Never disable, skip, or comment out a failing test to make the
   suite pass. Fix the code or fix the test — nothing else.
