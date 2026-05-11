@@ -2,7 +2,6 @@ package com.example.audit.event;
 
 import jakarta.validation.Valid;
 import java.time.Instant;
-import java.util.List;
 import org.springframework.format.annotation.DateTimeFormat;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.GetMapping;
@@ -29,13 +28,16 @@ public class AuditEventController {
   }
 
   @GetMapping
-  public List<AuditEvent> search(
+  public AuditEventPageResponse search(
       @RequestParam(required = false) String actor,
       @RequestParam(required = false) String resource,
       @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
           Instant from,
       @RequestParam(required = false) @DateTimeFormat(iso = DateTimeFormat.ISO.DATE_TIME)
-          Instant to) {
-    return service.search(actor, resource, from, to);
+          Instant to,
+      @RequestParam(required = false) String cursor,
+      @RequestParam(required = false) Integer limit) {
+    return new AuditEventPageResponse(
+        service.search(new AuditEventQuery(actor, resource, from, to, cursor, limit)), null);
   }
 }
