@@ -323,3 +323,24 @@
 - Legacy index drop остаётся follow-up после staging evidence.
 - T3 всё ещё временно rejects non-null cursor до T5. Это staged delivery, не
   финальное состояние feature.
+
+## Дополнение при реализации T4
+
+Обнаружен конфликт между планом T4 и текущим кодом:
+
+- T4 говорил "No JPA entity return types from controllers" и "architecture
+  test fails if a controller returns a JPA entity type".
+- Тот же T4 явно оставляет `POST /audit-events` out of scope.
+- Текущий `POST /audit-events` возвращает `AuditEvent`, то есть JPA entity.
+
+Решение для T4: сузить правило до Query API read endpoint (`GET /audit-events`).
+Иначе T4 либо должен менять POST-ответ, что противоречит out-of-scope, либо
+должен падать на уже существующем POST-контракте.
+
+Куда внесено:
+
+- `design.md`: architecture check scoped to `GET /audit-events` return types;
+  cleanup of existing POST response is outside Query API scope.
+- `tasks.md`: T4 DoD now requires query endpoint return type to avoid JPA
+  entities.
+- `plans/T4-plan.md`: constraints and verification aligned with this scope.

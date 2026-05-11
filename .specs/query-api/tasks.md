@@ -76,8 +76,8 @@ DoD:
 - Response item shape uses numeric database `id`, scalar `actor`/`resource`,
   `event_timestamp` → `occurredAt`, and `context` → `payload`.
 - Response uses a dedicated `AuditEventPageResponse { items, nextCursor }` DTO,
-  not the JPA entity. ArchUnit or equivalent asserts the controller does not
-  return entity types.
+  not the JPA entity. ArchUnit or equivalent asserts the query endpoint does
+  not return entity types.
 - Last-page `nextCursor` is omitted using matching Jackson configuration such
   as `@JsonInclude(NON_NULL)`.
 - Integration tests assert the response contract for non-empty and empty

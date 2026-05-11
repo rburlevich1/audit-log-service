@@ -20,7 +20,7 @@ removes JPA entity exposure from the query response and locks the wire shape.
 
 ## 03 Constraints
 
-- No JPA entity return types from controllers.
+- No JPA entity return types from the Query API `GET /audit-events` response.
 - No pagination behavior in this task.
 - No repository changes.
 - One response-contract PR.
@@ -32,14 +32,14 @@ removes JPA entity exposure from the query response and locks the wire shape.
 - Add mapper from `AuditEvent` to response DTO.
 - Update query controller to return the page DTO.
 - Configure omitted `nextCursor` with `@JsonInclude(NON_NULL)` or equivalent.
-- Add or update architecture test so controller method return types do not
+- Add or update architecture test so the query endpoint return type does not
   expose JPA entities.
 
 ## 05 Verification Method
 
 - Integration tests assert non-empty and empty query response JSON.
 - Tests verify `nextCursor` is omitted when absent.
-- Architecture test fails if a controller returns a JPA entity type.
+- Architecture test fails if the query endpoint returns a JPA entity type.
 - `./gradlew test` passes.
 
 ## 06 Integration With Existing Code
