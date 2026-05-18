@@ -1,0 +1,15 @@
+[features]
+codex_hooks = true
+hooks = true
+
+[[hooks.UserPromptSubmit]]
+[[hooks.UserPromptSubmit.hooks]]
+type = "command"
+command = ".codex/hooks/spec_self_eval_hook.py"
+timeout = 30
+
+[[hooks.Stop]]
+[[hooks.Stop.hooks]]
+type = "command"
+command = ".codex/hooks/spec_self_eval_hook.py"
+timeout = 900
