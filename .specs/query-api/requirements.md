@@ -65,13 +65,17 @@ result sets without loss or duplication.
   `400 Bad Request`.
 - When `cursor` is valid but belongs to different filters than the current
   request, the system shall return `422 Unprocessable Entity`.
-- When `limit` is supplied, the system shall compare it with the configured
-  maximum.
+- When `limit` is between `1` and the configured maximum inclusive, the system
+  shall return at most `limit` items.
 - When `limit` is omitted, the system shall apply the default page size.
 - When `limit` is greater than the configured maximum, the system shall return
   `400 Bad Request`.
 - When `limit` is less than `1`, the system shall return `400 Bad Request`.
 - When `from` or `to` is supplied, the value shall be an ISO-8601 UTC instant.
+- When `from` or `to` cannot be parsed as an ISO-8601 instant, the system shall
+  return `400 Bad Request`.
+- When both `from` and `to` are supplied and `from` is after `to`, the system
+  shall return `422 Unprocessable Entity`.
 
 ## Out of Scope
 

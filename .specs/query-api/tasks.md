@@ -43,7 +43,10 @@ Refs:
 
 Dependencies: T1.
 
-Scope: one API/service validation PR. No pagination, no cursor decoding.
+Scope: one API/service validation PR. No pagination, no cursor decoding. This
+task is an internal implementation slice, not the complete externally
+releasable Query API contract; the final Query API contract is complete only
+after T5 adds signed cursor pagination.
 
 DoD:
 - `GET /audit-events` accepts `actor`, `resource`, `from`, `to`, `cursor`, and

@@ -18,7 +18,8 @@ indexes required by the design.
 - PostgreSQL schema is managed by Flyway.
 - Existing V1 indexes on `actor`, `resource`, and `event_timestamp` remain for
   now.
-- Cleanup of legacy indexes is deferred to T7 after staging evidence.
+- Cleanup of legacy indexes is deferred to T7 and verified locally with
+  Testcontainers because this repository has no staging environment.
 
 ## 03 Constraints
 
