@@ -155,19 +155,16 @@ create index idx_audit_events_actor_resource_ts_id
 
 Do not drop existing single-column indexes in the first migration. The
 composite indexes likely subsume them for this endpoint, but removal is a
-separate migration decision that should be based on `EXPLAIN` output and write
-overhead.
+separate migration decision verified locally with Testcontainers in T7 because
+this repository has no staging environment.
 
 Write-amplification note: during the transition the table carries seven
 indexes (three legacy single-column + four new composites), and every INSERT
-updates all of them. Schedule the cleanup migration that drops the legacy
-indexes as a follow-up task tied to this feature, with a defined trigger
-(e.g. "after one week in staging with `EXPLAIN` showing the new composites
-cover the read path") — otherwise the temporary seven-index state quietly
-becomes permanent and degrades ingest throughput.
-The cleanup migration should prefer `DROP INDEX CONCURRENTLY` where the Flyway
-execution mode supports a non-transactional migration; otherwise schedule a
-regular `DROP INDEX` during an approved low-traffic maintenance window.
+updates all of them. T7 performs the cleanup migration with local
+Testcontainers verification that the four composite indexes remain present and
+the three legacy indexes are absent. Production deployment cadence and the
+choice between `DROP INDEX CONCURRENTLY` and regular `DROP INDEX` are left to
+the deployer, since this repository has no staging or production environment.
 
 The actor+resource composite is included because the example request uses both
 filters and bitmap index intersection would not preserve the desired ordering;
